@@ -11,8 +11,8 @@ language server.
 **Do not file issues, send PRs, or develop here.** Use
 <https://github.com/bitwisecook/tcl-lsp> for everything.
 
-This release: `v1.10.10` — see
-<https://github.com/bitwisecook/tcl-lsp/releases/tag/v1.10.10>.
+This release: `v1.11.0` — see
+<https://github.com/bitwisecook/tcl-lsp/releases/tag/v1.11.0>.
 
 ## Licence
 

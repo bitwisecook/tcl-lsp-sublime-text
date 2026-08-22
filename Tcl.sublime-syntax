@@ -11,6 +11,27 @@ file_extensions:
   - tk
   - itcl
   - tm
+  - test
+  - globals
+  - exp
+  - expect
+  - scf
+  - iapp
+  - iappimpl
+  - impl
+  - irul
+  - irule
+  - irules
+  - tmsh
+  - qsf
+  - qpf
+  - qip
+  - do
+  - tclspec
+  - sdc
+  - upf
+  - xdc
+  - apl
 
 first_line_match: '^#!.*(?:tclsh|wish)'
 
@@ -28,11 +49,25 @@ contexts:
     - include: number
     - include: escape
 
-  # Comments — only valid at command position (after ^, ;, or inside [...])
+  # Comments — only valid at command position (after ^, ;, or inside [...]).
+  # Pushed as a body context (not a single-line match) so a trailing unescaped
+  # backslash continues the comment onto the next physical line, matching Tcl's
+  # line-continuation rule (issue #759).
   comment:
-    - match: '(?:^|;)\s*(#.*)$'
-      captures:
-        1: comment.line.number-sign.tcl
+    - match: '(?:^|;)\s*(?=#)'
+      push: comment-body
+
+  comment-body:
+    - meta_content_scope: comment.line.number-sign.tcl
+    # Escaped backslash pair — consumed as content so it does NOT continue the
+    # comment (an even run of trailing backslashes terminates it).
+    - match: '\\\\'
+    # Backslash-newline continuation — stay in the comment on the next line
+    # (an odd run of trailing backslashes continues it).
+    - match: '\\\n'
+    # Plain end of line — no continuation, so end the comment.
+    - match: '\n'
+      pop: true
 
   # Proc definition — capture the procedure name for Goto Symbol.
   # The name class excludes string/brace/bracket delimiters so a bareword
@@ -192,7 +227,7 @@ contexts:
     - match: '\$\{[^}]+\}'
       scope: variable.other.braced.tcl
     # Namespace-qualified variable with optional array index
-    - match: '\$(?:[a-zA-Z_][a-zA-Z0-9_]*::)*[a-zA-Z_][a-zA-Z0-9_]*(?:\([^)]*\))?'
+    - match: '\$(?:[:]{2,})?(?:[A-Za-z_][A-Za-z0-9_]*[:]{2,})*[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?'
       scope: variable.other.tcl
 
   # Double-quoted strings with interpolation
@@ -226,14 +261,16 @@ contexts:
 
   # Keywords
   keyword:
-    # Control flow
-    - match: '(?<=^|\s|;|\[)(?:if|else|elseif|for|foreach|while|switch|break|continue|return|catch|try|throw|yield|yieldto|tailcall)(?=\s|$|;)'
+    # Control flow. lmap lives here (not in the built-in-commands list below)
+    # because the registry carries it with the same LANGUAGE_KEYWORD trait as
+    # foreach — it binds loop variables, not just a plain library call (#862).
+    - match: '(?<=^|\s|;|\[)(?:break|catch|continue|else|elseif|error|finally|for|foreach|foreachLine|if|lfilter|lmap|on|return|switch|tailcall|throw|trap|try|when|while|yield|yieldto)(?=\s|$|;)'
       scope: keyword.control.tcl
     # Definitions
-    - match: '(?<=^|\s|;|\[)(?:proc|namespace|variable|global|upvar|uplevel|package|source|rename|interp|coroutine|apply)(?=\s|$|;)'
+    - match: '(?<=^|\s|;|\[)(?:apply|case|classvariable|const|coroutine|eval|global|interp|itcl::class|link|namespace|oo::Helpers::callback|oo::Helpers::classvariable|oo::Helpers::link|oo::Helpers::mymethod|oo::Helpers::next|oo::Helpers::nextto|oo::Helpers::self|oo::abstract|oo::class|oo::configurable|oo::define|oo::objdefine|oo::object|oo::singleton|package|proc|rename|source|uplevel|upvar|variable)(?=\s|$|;)'
       scope: keyword.other.tcl
     # Built-in commands
-    - match: '(?<=^|\s|;|\[)(?:set|unset|puts|gets|read|open|close|expr|eval|info|array|dict|string|list|lappend|lassign|lindex|linsert|llength|lmap|lrange|lrepeat|lreplace|lreverse|lsearch|lset|lsort|join|split|format|scan|regexp|regsub|append|incr|after|file|glob|cd|pid|exec|socket|fconfigure|fileevent|flush|seek|tell|eof|fblocked|fcopy|chan|encoding|concat|subst|error|exit|time|update|vwait|parray|load|unload)(?=\s|$|;)'
+    - match: '(?<=^|\s|;|\[)(?:after|append|array|auto_execok|auto_import|auto_load|auto_load_index|auto_mkindex|auto_mkindex_old|auto_qualify|auto_reset|bgerror|binary|cd|chan|clock|close|concat|coroinject|coroprobe|dict|divmod|encoding|eof|eq|exec|exit|expr|fblocked|fconfigure|fcopy|file|fileevent|filename|flush|format|fpclassify|frexp|ge|gets|gettimes|glob|gt|history|http|in|incr|info|join|lappend|lassign|le|ledit|lgen|lindex|linsert|list|llength|load|lpop|lrange|lremove|lrepeat|lreplace|lreverse|lsearch|lseq|lset|lsort|lstring|lt|memory|modf|ne|ni|noop|oo::copy|open|parray|pid|pkg::create|pkg_mkIndex|pkg_mkindex|puts|pwd|re_quote|read|readFile|regex::quote|regex_quote|regexp|regexp::quote|registry|regsub|remquo|scan|seek|set|socket|split|string|subst|tclLog|tclPkgSetup|tclPkgUnknown|tcl_endOfWord|tcl_findLibrary|tcl_startOfNextWord|tcl_startOfPreviousWord|tcl_wordBreakAfter|tcl_wordBreakBefore|tell|time|timer|timerate|trace|unicode|unknown|unload|unset|update|vwait|writeFile|zipfs|zlib)(?=\s|$|;)'
       scope: support.function.tcl
 
   # Operators
@@ -248,19 +285,19 @@ contexts:
   # Numbers
   number:
     # Hex
-    - match: '\b0[xX][0-9a-fA-F]+\b'
+    - match: '\b0[xX][0-9a-fA-F](?:[0-9a-fA-F]|_+[0-9a-fA-F])*\b'
       scope: constant.numeric.hex.tcl
     # Octal
-    - match: '\b0[oO][0-7]+\b'
+    - match: '\b0[oO][0-7](?:[0-7]|_+[0-7])*\b'
       scope: constant.numeric.octal.tcl
     # Binary
-    - match: '\b0[bB][01]+\b'
+    - match: '\b0[bB][01](?:[01]|_+[01])*\b'
       scope: constant.numeric.binary.tcl
     # Float or integer
-    - match: '\b[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\b'
+    - match: '\b(?:0[dD][0-9](?:[0-9]|_+[0-9])*|[0-9](?:[0-9]|_+[0-9])*(?:\.[0-9](?:[0-9]|_+[0-9])*)?(?:[eE][+-]?[0-9](?:[0-9]|_+[0-9])*)?)\b'
       scope: constant.numeric.tcl
 
   # Backslash escapes
   escape:
-    - match: '\\(?:[abfnrtv\\"{}()\[\]\$]|[0-7]{1,3}|x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{1,4}|\n)'
+    - match: '\\(?:[abfnrtv\\"{}()\[\]\$]|(?:[0-3][0-7]{0,2}|[4-7][0-7]?)|x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{1,4}|U(?:(?:000[0-9a-fA-F]{4}|0010[0-9a-fA-F]{3})[0-9a-fA-F]|(?:00[0-9a-fA-F]{4}|010[0-9a-fA-F]{3})[0-9a-fA-F]|(?:0[0-9a-fA-F]{4}|10[0-9a-fA-F]{3})[0-9a-fA-F]|[0-9a-fA-F]{1,5})|\n)'
       scope: constant.character.escape.tcl

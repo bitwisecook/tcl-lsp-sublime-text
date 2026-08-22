@@ -1,3 +1,21 @@
+# tcl-lsp — a language server and toolchain for Tcl
+# Copyright (C) 2026 James Deucker (bitwisecook) <https://github.com/bitwisecook>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """
 Tcl Language Support — Sublime Text LSP helper plugin.
 
@@ -10,7 +28,6 @@ Constraint: runs in Sublime Text's embedded Python 3.10+ (plugin host 38).
 
 import functools
 import os
-import shutil
 import zipfile
 
 import sublime  # type: ignore[import-not-found]
@@ -19,25 +36,40 @@ import sublime_plugin  # type: ignore[import-not-found]
 PACKAGE_NAME = "Tcl"
 SETTINGS_KEY = "LSP-Tcl.sublime-settings"
 SERVER_DIR = "server"
-SERVER_ENTRY = "tcl-lsp-server.pyz"
+
+
+def _server_entry():
+    # type: () -> str
+    """Return the bundled native server binary name for this platform."""
+    if sublime.platform() == "windows" or os.name == "nt":
+        return "tcl-lsp-server.exe"
+    return "tcl-lsp-server"
+
+
+SERVER_ENTRY = _server_entry()
 
 # Dialects the server supports, keyed for the quick-panel.
 DIALECTS = [
-    ("tcl8.6", "Tcl 8.6 (default)"),
-    ("tcl8.5", "Tcl 8.5"),
+    # @generated:dialects:begin
+    ("bpf", "BPF"),
+    ("cadence-eda-tcl", "Cadence EDA Tcl"),
+    ("expect", "Expect"),
+    ("f5-bigip", "F5 BIG-IP"),
+    ("f5-iapps", "F5 iApps"),
+    ("f5-irules", "F5 iRules"),
+    ("f5-tmsh", "F5 tmsh Scripts"),
+    ("intel-quartus-eda-tcl", "Intel Quartus EDA Tcl"),
+    ("mentor-eda-tcl", "Mentor EDA Tcl"),
+    ("microchip-libero-eda-tcl", "Microchip Libero EDA Tcl"),
+    ("spectcl", "SpecTcl"),
+    ("synopsys-eda-tcl", "Synopsys EDA Tcl"),
     ("tcl8.4", "Tcl 8.4"),
+    ("tcl8.5", "Tcl 8.5"),
+    ("tcl8.6", "Tcl 8.6 (default)"),
     ("tcl9.0", "Tcl 9.0"),
     ("tcl9.1", "Tcl 9.1"),
-    ("f5-irules", "F5 iRules"),
-    ("f5-iapps", "F5 iApps"),
-    ("f5-bigip", "F5 BIG-IP"),
-    ("f5-tmsh", "F5 TMSH"),
-    ("synopsys-eda-tcl", "Synopsys EDA"),
-    ("cadence-eda-tcl", "Cadence EDA"),
-    ("xilinx-eda-tcl", "Xilinx EDA"),
-    ("intel-quartus-eda-tcl", "Intel Quartus"),
-    ("mentor-eda-tcl", "Mentor EDA"),
-    ("expect", "Expect"),
+    ("xilinx-eda-tcl", "Xilinx EDA Tcl"),
+    # @generated:dialects:end
 ]
 
 # Map syntax name → dialect ID for automatic syncing when the user
@@ -51,6 +83,7 @@ _SYNTAX_DIALECT_MAP = {
     "iRule": "f5-irules",
     "iApp": "f5-iapps",
     "APL": "f5-iapps",
+    "BIG-IP": "f5-bigip",
     "Synopsys EDA": "synopsys-eda-tcl",
     "Cadence EDA": "cadence-eda-tcl",
     "Xilinx EDA": "xilinx-eda-tcl",
@@ -84,25 +117,43 @@ def _cache_dir():
     return cache
 
 
+def _ensure_executable(path):
+    # type: (str) -> str
+    """Ensure *path* has the +x bit set (files extracted from a ZIP may
+    lose it) and return the path unchanged."""
+    if not path or os.name == "nt":
+        return path
+    try:
+        mode = os.stat(path).st_mode
+        if not (mode & 0o111):
+            os.chmod(path, 0o755)
+    except OSError:
+        pass
+    return path
+
+
 def _find_bundled_server():
     # type: () -> str
-    """Locate the bundled server entry point (__main__.py).
+    """Locate the bundled native server binary (server/tcl-lsp-server).
 
     First checks the extracted Packages/Tcl/server/ directory (normal for
     development or overridden-package installs).  If not found, checks
     Cache/Tcl/server/ (previously extracted).  Finally, extracts the
     server/ tree from the .sublime-package ZIP in Installed Packages/.
+
+    On the way out the binary is marked executable, since files extracted
+    from a package ZIP lose the +x bit.
     """
     # 1. Extracted package directory (development / loose install)
     candidate = os.path.join(_package_dir(), SERVER_DIR, SERVER_ENTRY)
     if os.path.isfile(candidate):
-        return candidate
+        return _ensure_executable(candidate)
 
     # 2. Cache (previously extracted)
     cached_dir = os.path.join(_cache_dir(), SERVER_DIR)
     cached_entry = os.path.join(cached_dir, SERVER_ENTRY)
     if os.path.isfile(cached_entry):
-        return cached_entry
+        return _ensure_executable(cached_entry)
 
     # 3. Extract server/ tree from .sublime-package ZIP
     pkg_zip = os.path.join(
@@ -112,36 +163,19 @@ def _find_bundled_server():
     if os.path.isfile(pkg_zip):
         try:
             with zipfile.ZipFile(pkg_zip, "r") as zf:
-                server_members = [n for n in zf.namelist() if n.startswith(SERVER_DIR + "/")]
+                server_members = [
+                    n for n in zf.namelist() if n.startswith(SERVER_DIR + "/")
+                ]
                 if server_members:
                     dest = _cache_dir()
                     for member in server_members:
                         zf.extract(member, dest)
                     if os.path.isfile(cached_entry):
-                        return cached_entry
+                        return _ensure_executable(cached_entry)
         except (zipfile.BadZipFile, OSError):
             pass
 
     return ""
-
-
-def _discover_python():
-    # type: () -> str
-    """Find a suitable Python 3.10+ interpreter on PATH."""
-    candidates = [
-        "python3.15",
-        "python3.14",
-        "python3.14",
-        "python3.12",
-        "python3.11",
-        "python3.10",
-        "python3",
-    ]
-    for name in candidates:
-        path = shutil.which(name)
-        if path is not None:
-            return path
-    return "python3"
 
 
 def _load_settings():
@@ -184,16 +218,31 @@ def _check_view_dialect(view):
 
 
 # LSP AbstractPlugin — defined at module level so LSP can introspect it.
-# Guarded by try/except so the plugin loads even without the LSP package.
+# The sublimelsp/LSP package is optional: without it the syntax/commands half of
+# this plugin still loads, `TclLsp` stays None, and `_suggest_lsp_install` nudges
+# the user.  The class is bound to `TclLsp` in the `else` branch rather than
+# defined directly in the `try`, so the name has one type rather than two.
+TclLsp = None  # type: ignore[var-annotated]
 
 try:
     from LSP.plugin import (
-        AbstractPlugin,  # type: ignore[import-not-found]
-        register_plugin,  # type: ignore[import-not-found]
-        unregister_plugin,  # type: ignore[import-not-found]
+        AbstractPlugin,
+        register_plugin,
+        unregister_plugin,
     )
+except ImportError:
 
-    class TclLsp(AbstractPlugin):
+    def register_plugin(plugin):
+        # type: (type) -> None
+        raise RuntimeError("sublimelsp/LSP is not installed")
+
+    def unregister_plugin(plugin):
+        # type: (type) -> None
+        raise RuntimeError("sublimelsp/LSP is not installed")
+
+else:
+
+    class _TclLspPlugin(AbstractPlugin):
         """LSP client configuration for the tcl-lsp server."""
 
         @classmethod
@@ -221,44 +270,25 @@ try:
         def additional_variables(cls):
             # type: () -> dict
             settings = _load_settings()
-            # Allow user override of server path.
+            # Allow user override of server path, otherwise use the bundled
+            # native binary (marked executable on first run).
             user_path = settings.get("server_path")
             if user_path and os.path.isfile(user_path):
-                server = user_path
+                server = _ensure_executable(user_path)
             else:
                 server = _find_bundled_server()
 
-            # Allow user override of Python path.
-            user_python = settings.get("python_path")
-            if user_python and os.path.isfile(user_python):
-                python = user_python
-            else:
-                python = _discover_python()
-
             return {
                 "server_path": server,
-                "python": python,
             }
 
         @classmethod
         def can_start(cls, window, initiating_view, workspace_folders, configuration):
             """Return an error string if the server cannot start."""
             variables = cls.additional_variables() or {}
-            python = variables.get("python", "python3")
             server = variables.get("server_path", "")
 
-            if not shutil.which(python):
-                return (
-                    "Python 3.10+ interpreter not found: {}.  "
-                    "The .sublime-package bundles all Python dependencies, "
-                    "but a Python interpreter must be installed on your system.  "
-                    "Install Python from https://www.python.org/downloads/ or "
-                    "via Homebrew (brew install python@3.14).  "
-                    "See https://github.com/bitwisecook/tcl-lsp/blob/main/INSTALL.md"
-                    "#python-prerequisite for details."
-                ).format(python)
-
-            if not server or (not os.path.isfile(server) and not shutil.which(server)):
+            if not server or not os.path.isfile(server):
                 return (
                     "tcl-lsp server not found.  "
                     "Download the .sublime-package from the GitHub Releases "
@@ -268,8 +298,7 @@ try:
 
             return None
 
-except ImportError:
-    TclLsp = None  # type: ignore[assignment,misc]
+    TclLsp = _TclLspPlugin
 
 
 # Lifecycle
@@ -534,7 +563,11 @@ class TclUnminifyErrorCommand(sublime_plugin.WindowCommand):
         with open(map_path, "r", encoding="utf-8") as f:
             map_text = f.read()
         # Send to LSP
-        self.window.active_view().run_command(
+        view = self.window.active_view()
+        if view is None:
+            sublime.error_message("No active view to unminify into.")
+            return
+        view.run_command(
             "lsp_execute",
             {
                 "command_name": "tcl-lsp.unminifyError",
@@ -580,23 +613,29 @@ class TclDialectSyncListener(sublime_plugin.EventListener):
         if syntax is None or syntax.name not in _SYNTAX_DIALECT_MAP:
             return
         view.settings().set("_tcl_lsp_syn", True)
-        view.settings().add_on_change("tcl_dialect", functools.partial(_check_view_dialect, view))
+        view.settings().add_on_change(
+            "tcl_dialect", functools.partial(_check_view_dialect, view)
+        )
 
 
 # Helpers
 
 
 def _is_tcl_view(view):
-    # type: (sublime.View) -> bool
+    # type: (sublime.View | None) -> bool
     """Return True if the view holds one of our package's syntaxes.
 
     Matches by scope rather than syntax-file path so it covers every
     dialect the package ships — the EDA, Expect, iApp and Tcl-version
-    grammars all declare ``source.tcl``; iRules use ``source.irule`` and
-    F5 iApp APL uses ``source.apl``.
+    grammars all declare ``source.tcl``; iRules use ``source.irule``,
+    F5 iApp APL uses ``source.tcl-apl`` and a BIG-IP config uses
+    ``source.tcl-bigip`` (the same scope names the VS Code grammars use,
+    so every editor agrees).
     """
     if view is None:
         return False
     sel = view.sel()
     point = sel[0].b if sel else 0
-    return view.match_selector(point, "source.tcl, source.irule, source.apl")
+    return view.match_selector(
+        point, "source.tcl, source.irule, source.tcl-apl, source.tcl-bigip"
+    )
